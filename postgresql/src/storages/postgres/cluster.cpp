@@ -1,5 +1,7 @@
 #include <userver/storages/postgres/cluster.hpp>
 
+#include <utility>
+
 #include <storages/postgres/detail/cluster_impl.hpp>
 #include <storages/postgres/detail/pg_impl_types.hpp>
 
@@ -19,6 +21,38 @@ Cluster::Cluster(
     dynamic_config::Source config_source,
     USERVER_NAMESPACE::utils::statistics::MetricsStoragePtr metrics,
     int shard_number
+)
+    : Cluster(
+          USERVER_NAMESPACE::utils::impl::InternalTag{},
+          std::move(dsns),
+          resolver,
+          bg_task_processor,
+          cluster_settings,
+          std::move(default_cmd_ctls),
+          testsuite_pg_ctl,
+          ei_settings,
+          testsuite_tasks,
+          std::move(config_source),
+          std::move(metrics),
+          shard_number,
+          {}
+      )
+{}
+
+Cluster::Cluster(
+    USERVER_NAMESPACE::utils::impl::InternalTag,
+    DsnList dsns,
+    clients::dns::Resolver* resolver,
+    engine::TaskProcessor& bg_task_processor,
+    const ClusterSettings& cluster_settings,
+    DefaultCommandControls&& default_cmd_ctls,
+    const testsuite::PostgresControl& testsuite_pg_ctl,
+    const error_injection::Settings& ei_settings,
+    testsuite::TestsuiteTasks& testsuite_tasks,
+    dynamic_config::Source config_source,
+    USERVER_NAMESPACE::utils::statistics::MetricsStoragePtr metrics,
+    int shard_number,
+    std::function<std::chrono::milliseconds()> load_duration_provider
 ) {
     pimpl_ = std::make_unique<detail::ClusterImpl>(
         std::move(dsns),
@@ -31,7 +65,8 @@ Cluster::Cluster(
         testsuite_tasks,
         std::move(config_source),
         std::move(metrics),
-        shard_number
+        shard_number,
+        std::move(load_duration_provider)
     );
 }
 

@@ -5,6 +5,12 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <chrono>
+#include <iterator>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 #include <userver/utest/utest.hpp>
 
@@ -74,14 +80,14 @@ constexpr size_t kTestsuiteConnlimit = kTestsuiteServerConnlimit - kReservedConn
 constexpr size_t kFallbackConnlimit = 17;
 constexpr size_t kMaxStepsWithError = 3;
 
-enum class MigrationVersion { kV1 = 0, kV2 = 1, kCount };
+enum class MigrationVersion { kV1 = 0, kV2 = 1, kV3 = 2, kCount };
 
 }  // namespace
 
 class Watchdog : public PostgreSQLBase {
 public:
     static_assert(
-        static_cast<int>(MigrationVersion::kCount) == 2,
+        static_cast<int>(MigrationVersion::kCount) == 3,
         "It is very dangerous. You must add new tests for a new migration version!"
     );
 
@@ -108,31 +114,64 @@ public:
         return connlimit_watchdog_v2.GetConnlimit();
     }
 
-    pg::ConnlimitWatchdog MakeConnlimitWatchdog(std::string host_name = hostinfo::blocking::GetRealHostName()) {
-        return pg::ConnlimitWatchdog{cluster_, testsuite_tasks_, kShardNumber, kFallbackConnlimit, [] {}, host_name};
+    std::size_t DoStepV3() {
+        auto connlimit_watchdog_v3 = MakeConnlimitWatchdog(
+            "host3", [] { return std::chrono::seconds{6}; }
+        );
+        connlimit_watchdog_v3.StepV3();
+        return connlimit_watchdog_v3.GetConnlimit();
+    }
+
+    pg::ConnlimitWatchdog MakeConnlimitWatchdog(
+        std::string host_name = hostinfo::blocking::GetRealHostName(),
+        pg::ConnlimitWatchdog::LoadDurationProvider load_duration_provider = {}
+    ) {
+        return pg::ConnlimitWatchdog{
+            cluster_,
+            testsuite_tasks_,
+            kShardNumber,
+            kFallbackConnlimit,
+            [] {},
+            std::move(load_duration_provider),
+            std::move(host_name)
+        };
     }
 
     pgd::ClusterImpl& GetCluster() { return cluster_; }
 
-private:
     void ClearTable() {
         auto t = GetTransaction(cluster_);
         t.Execute("DELETE FROM u_clients");
         t.Commit();
     }
 
+    void InsertTicket(std::string_view host_name, std::chrono::seconds age) {
+        auto t = GetTransaction(cluster_);
+        t.Execute(
+            R"(
+                INSERT INTO u_clients (hostname, updated, max_connections, cur_user)
+                VALUES ($1, NOW() - $2, 1, current_user)
+            )",
+            host_name,
+            age
+        );
+        t.Commit();
+    }
+
+private:
     testsuite::TestsuiteTasks testsuite_tasks_{true};
     pgd::ClusterImpl cluster_;
     utils::impl::UserverExperimentsScope scope_;
 };
 
 template <class T>
-concept HasNewVersion = requires { &T::StepV3; };
+concept HasNewVersion = requires { &T::StepV4; };
 
 template <class T>
 concept HasOldVersions = requires {
     &T::StepV1;
     &T::StepV2;
+    &T::StepV3;
 };
 
 static_assert(
@@ -148,17 +187,20 @@ UTEST_F(Watchdog, AllPermutations) {
         "Do not remove old versions of StepV*, because there may be users that still use it and they may update "
         "userver one day. So we need to make sure that the update (and a rollback) will be successful."
     );
-    // Fill the table by two rows.
+    // Fill the table with one row from every migration version.
     EXPECT_EQ(kTestsuiteConnlimit, DoStepV1());
     EXPECT_EQ(kTestsuiteConnlimit / 2, DoStepV2());
+    EXPECT_EQ(kTestsuiteConnlimit / 3, DoStepV3());
 
-    std::vector<MigrationVersion>
-        combinations{MigrationVersion::kV1, MigrationVersion::kV1, MigrationVersion::kV2, MigrationVersion::kV2};
+    std::vector<MigrationVersion> combinations{
+        MigrationVersion::kV1, MigrationVersion::kV2, MigrationVersion::kV3};
     auto do_step = [this](MigrationVersion version) {
         if (version == MigrationVersion::kV1) {
-            EXPECT_EQ(kTestsuiteConnlimit / 2, DoStepV1());
+            EXPECT_EQ(kTestsuiteConnlimit / 3, DoStepV1());
         } else if (version == MigrationVersion::kV2) {
-            EXPECT_EQ(kTestsuiteConnlimit / 2, DoStepV2());
+            EXPECT_EQ(kTestsuiteConnlimit / 3, DoStepV2());
+        } else if (version == MigrationVersion::kV3) {
+            EXPECT_EQ(kTestsuiteConnlimit / 3, DoStepV3());
         } else {
             UINVARIANT(false, "Please provide the code for this version");
         }
@@ -223,14 +265,14 @@ UTEST_F(Watchdog, FallbackConnlimit) {
     auto expected_connlimit = kTestsuiteConnlimit;
     auto watchdog = MakeConnlimitWatchdog();
     // Do single step with working connection
-    watchdog.StepV2();
+    watchdog.StepV3();
     // Update connection to a non-working one
     GetCluster().SetDsnList({GetUnavailableDsn()});
 
     while (expected_connlimit >= kFallbackConnlimit) {
         for (size_t i = 0; i <= kMaxStepsWithError; ++i) {
             ASSERT_EQ(expected_connlimit, watchdog.GetConnlimit());
-            watchdog.StepV2();
+            watchdog.StepV3();
         }
         expected_connlimit /= 2;
     }
@@ -249,6 +291,68 @@ UTEST_F(Watchdog, CheckLimit) {
 
     // There are two hosts after 'StepV2'.
     EXPECT_EQ(kConnectionsLimit / 2, DoStepV1());
+
+    // There are three hosts after 'StepV3'.
+    EXPECT_EQ(kConnectionsLimit / 3, DoStepV3());
+}
+
+UTEST_F(Watchdog, DynamicTicketTtlKeepsSlowInstance) {
+    InsertTicket("slow-instance", std::chrono::seconds{30});
+
+    auto watchdog_v3 = MakeConnlimitWatchdog(
+        "observer-v3", [] { return std::chrono::seconds{20}; }
+    );
+    watchdog_v3.StepV3();
+    EXPECT_EQ(kTestsuiteConnlimit / 2, watchdog_v3.GetConnlimit());
+
+    ClearTable();
+    InsertTicket("slow-instance", std::chrono::seconds{30});
+    auto watchdog_v2 = MakeConnlimitWatchdog("observer-v2");
+    watchdog_v2.StepV2();
+    EXPECT_EQ(kTestsuiteConnlimit, watchdog_v2.GetConnlimit());
+}
+
+UTEST_F(Watchdog, UsesMinTicketTtlUntilLoadDurationIsKnown) {
+    InsertTicket("restarting-instance", std::chrono::seconds{20});
+
+    std::chrono::milliseconds load_duration{};
+    auto watchdog = MakeConnlimitWatchdog("observer", [&load_duration] { return load_duration; });
+
+    watchdog.StepV3();
+    EXPECT_EQ(kTestsuiteConnlimit, watchdog.GetConnlimit());
+
+    load_duration = std::chrono::seconds{10};
+    watchdog.StepV3();
+    EXPECT_EQ(kTestsuiteConnlimit / 2, watchdog.GetConnlimit());
+}
+
+UTEST_F(Watchdog, CalculatesTicketTtlFromLoadDuration) {
+    struct TestCase final {
+        std::chrono::milliseconds load_duration;
+        std::chrono::seconds ticket_age;
+        bool ticket_is_alive;
+    };
+    constexpr TestCase kTestCases[]{
+        {std::chrono::seconds{0}, std::chrono::seconds{16}, false},
+        {std::chrono::seconds{4}, std::chrono::seconds{16}, false},
+        {std::chrono::seconds{5}, std::chrono::seconds{16}, false},
+        {std::chrono::seconds{6}, std::chrono::seconds{16}, true},
+        {std::chrono::seconds{20}, std::chrono::seconds{30}, true},
+    };
+
+    for (std::size_t i = 0; i < std::size(kTestCases); ++i) {
+        ClearTable();
+        InsertTicket("peer", kTestCases[i].ticket_age);
+        const auto host_name = fmt::format("formula-host-{}", i);
+        const auto load_duration = kTestCases[i].load_duration;
+        auto watchdog = MakeConnlimitWatchdog(host_name, [load_duration] {
+            return load_duration;
+        });
+
+        watchdog.StepV3();
+        const auto expected_instances = kTestCases[i].ticket_is_alive ? 2 : 1;
+        EXPECT_EQ(kTestsuiteConnlimit / expected_instances, watchdog.GetConnlimit());
+    }
 }
 
 USERVER_NAMESPACE_END

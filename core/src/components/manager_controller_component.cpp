@@ -85,6 +85,11 @@ ManagerControllerComponent::ManagerControllerComponent(
 
 ManagerControllerComponent::~ManagerControllerComponent() { config_subscription_.Unsubscribe(); }
 
+std::chrono::milliseconds
+ManagerControllerComponent::GetLoadDuration(utils::impl::InternalTag) const noexcept {
+    return components_manager_.GetLoadDuration();
+}
+
 void ManagerControllerComponent::WriteStatistics(utils::statistics::Writer& writer) {
     // task processors
     for (const auto& [name, task_processor] : components_manager_.GetTaskProcessorsMap()) {

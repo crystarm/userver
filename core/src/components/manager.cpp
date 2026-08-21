@@ -293,7 +293,7 @@ void Manager::OnSignal(int signum) {
 
 std::chrono::steady_clock::time_point Manager::GetStartTime() const { return start_time_; }
 
-std::chrono::milliseconds Manager::GetLoadDuration() const { return load_duration_; }
+std::chrono::milliseconds Manager::GetLoadDuration() const { return load_duration_.load(); }
 
 std::chrono::milliseconds Manager::GetPreLoadDuration() const { return pre_load_duration_; }
 
@@ -429,7 +429,7 @@ void Manager::AddComponents(const ComponentList& component_list) {
         throw;
     }
 
-    auto stop_time = std::chrono::steady_clock::now();
+    const auto stop_time = std::chrono::steady_clock::now();
     load_duration_ = std::chrono::duration_cast<std::chrono::milliseconds>(stop_time - start_time);
 }
 

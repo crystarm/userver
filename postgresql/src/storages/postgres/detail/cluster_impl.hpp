@@ -41,7 +41,8 @@ public:
         testsuite::TestsuiteTasks& testsuite_tasks,
         dynamic_config::Source config_source,
         USERVER_NAMESPACE::utils::statistics::MetricsStoragePtr metrics,
-        int shard_number
+        int shard_number,
+        ConnlimitWatchdog::LoadDurationProvider load_duration_provider = {}
     );
 
     ~ClusterImpl();

@@ -3,11 +3,14 @@
 /// @file userver/components/manager_controller_component.hpp
 /// @brief @copybrief components::ManagerControllerComponent
 
+#include <chrono>
+
 #include <userver/components/component_fwd.hpp>
 #include <userver/components/raw_component_base.hpp>
 #include <userver/concurrent/async_event_source.hpp>
 #include <userver/dynamic_config/snapshot.hpp>
 #include <userver/engine/task/task_processor_fwd.hpp>
+#include <userver/utils/impl/internal_tag.hpp>
 #include <userver/utils/statistics/entry.hpp>
 
 USERVER_NAMESPACE_BEGIN
@@ -86,6 +89,11 @@ public:
     ManagerControllerComponent(const components::ComponentConfig& config, const components::ComponentContext& context);
 
     ~ManagerControllerComponent() override;
+
+    /// @cond
+    // For internal use only.
+    std::chrono::milliseconds GetLoadDuration(utils::impl::InternalTag) const noexcept;
+    /// @endcond
 
 private:
     void WriteStatistics(utils::statistics::Writer& writer);

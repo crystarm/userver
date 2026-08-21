@@ -1,5 +1,7 @@
 #include <userver/storages/postgres/component.hpp>
 
+#include <chrono>
+#include <functional>
 #include <optional>
 #include <string_view>
 
@@ -9,6 +11,7 @@
 #include <storages/postgres/postgres_secdist.hpp>
 #include <userver/clients/dns/resolver_utils.hpp>
 #include <userver/components/component.hpp>
+#include <userver/components/manager_controller_component.hpp>
 #include <userver/components/statistics_storage.hpp>
 #include <userver/dynamic_config/storage/component.hpp>
 #include <userver/engine/task/task_processor_fwd.hpp>
@@ -194,10 +197,21 @@ Postgres::Postgres(const ComponentConfig& config, const ComponentContext& contex
 
     auto* resolver = clients::dns::GetResolverPtr(config, context);
     auto metrics = context.FindComponent<components::StatisticsStorage>().GetMetricsStorage();
+    std::function<std::chrono::milliseconds()> load_duration_provider;
+    if (initial_settings_.connlimit_mode == storages::postgres::ConnlimitMode::kAuto) {
+        if (const auto* const manager_controller =
+                context.FindComponentOptional<components::ManagerControllerComponent>())
+        {
+            load_duration_provider = [manager_controller] {
+                return manager_controller->GetLoadDuration(USERVER_NAMESPACE::utils::impl::InternalTag{});
+            };
+        }
+    }
 
     int shard_number = 0;
     for (auto& dsns : cluster_desc) {
         auto cluster = std::make_shared<pg::Cluster>(
+            USERVER_NAMESPACE::utils::impl::InternalTag{},
             std::move(dsns),
             resolver,
             bg_task_processor,
@@ -212,7 +226,8 @@ Postgres::Postgres(const ComponentConfig& config, const ComponentContext& contex
             testsuite_tasks,
             config_source_,
             metrics,
-            shard_number++
+            shard_number++,
+            load_duration_provider
         );
         database_->clusters_.push_back(cluster);
     }

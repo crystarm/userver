@@ -3,6 +3,8 @@
 /// @file userver/storages/postgres/cluster.hpp
 /// @brief @copybrief storages::postgres::Cluster
 
+#include <chrono>
+#include <functional>
 #include <memory>
 
 #include <userver/clients/dns/resolver_fwd.hpp>
@@ -12,6 +14,7 @@
 #include <userver/error_injection/settings_fwd.hpp>
 #include <userver/testsuite/postgres_control.hpp>
 #include <userver/testsuite/tasks.hpp>
+#include <userver/utils/impl/internal_tag.hpp>
 
 #include <userver/storages/postgres/cluster_types.hpp>
 #include <userver/storages/postgres/database.hpp>
@@ -82,6 +85,26 @@ public:
         USERVER_NAMESPACE::utils::statistics::MetricsStoragePtr metrics,
         int shard_number
     );
+
+    /// @cond
+    // For internal use only.
+    Cluster(
+        USERVER_NAMESPACE::utils::impl::InternalTag,
+        DsnList dsns,
+        clients::dns::Resolver* resolver,
+        engine::TaskProcessor& bg_task_processor,
+        const ClusterSettings& cluster_settings,
+        DefaultCommandControls&& default_cmd_ctls,
+        const testsuite::PostgresControl& testsuite_pg_ctl,
+        const error_injection::Settings& ei_settings,
+        testsuite::TestsuiteTasks& testsuite_tasks,
+        dynamic_config::Source config_source,
+        USERVER_NAMESPACE::utils::statistics::MetricsStoragePtr metrics,
+        int shard_number,
+        std::function<std::chrono::milliseconds()> load_duration_provider
+    );
+    /// @endcond
+
     ~Cluster();
 
     /// Get cluster statistics

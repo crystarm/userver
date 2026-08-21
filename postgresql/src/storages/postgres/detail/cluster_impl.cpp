@@ -89,7 +89,8 @@ ClusterImpl::ClusterImpl(
     testsuite::TestsuiteTasks& testsuite_tasks,
     dynamic_config::Source config_source,
     USERVER_NAMESPACE::utils::statistics::MetricsStoragePtr metrics,
-    int shard_number
+    int shard_number,
+    ConnlimitWatchdog::LoadDurationProvider load_duration_provider
 )
     : cluster_settings_(cluster_settings),
       resolver_(resolver),
@@ -105,7 +106,8 @@ ClusterImpl::ClusterImpl(
           testsuite_tasks,
           shard_number,
           cluster_settings.pool_settings.min_size,
-          [this]() { OnConnlimitChanged(); }
+          [this]() { OnConnlimitChanged(); },
+          std::move(load_duration_provider)
       )
 {
     CreateTopology(dsns);

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include <memory>
 #include <shared_mutex>
 #include <string>
@@ -105,7 +107,7 @@ private:
     engine::TaskProcessor* default_task_processor_{nullptr};
     const std::chrono::steady_clock::time_point start_time_;
     const std::chrono::milliseconds pre_load_duration_{0};
-    std::chrono::milliseconds load_duration_{0};
+    std::atomic<std::chrono::milliseconds> load_duration_{std::chrono::milliseconds::zero()};
 
     os_signals::ProcessorComponent* signal_processor_{nullptr};
 };

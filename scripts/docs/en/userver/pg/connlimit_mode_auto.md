@@ -30,6 +30,8 @@ client_max_connections = server_max_connections/instances - reserved
 The service identifies `instances` based on the following algorithm.
 The service creates `u_clients` table and regularly writes down information about
 itself. After that the service reads the table and identifies alive instances.
+An instance is considered alive for `max(3 * engine.load-ms, 15 seconds)` after its last update. This prevents unnecessary
+connection rebalancing when service startup takes more than 15 seconds.
 `reserved` is set to be 5 to reflect administrative scripts connections,
 migration scripts, etc.
 
